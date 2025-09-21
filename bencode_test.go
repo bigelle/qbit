@@ -46,3 +46,31 @@ func TestReadInt(t *testing.T) {
 	n, _, err = ReadInt(buf)
 	require.Error(t, err)
 }
+
+func TestReadString(t *testing.T) {
+	// A 4 character string:
+	buf := []byte("4:spam")
+	str, read, err := ReadString(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "spam", str)
+	assert.Equal(t, 6, read)
+
+	// A long string containing spaces:
+	buf = []byte("444:Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum")
+	str, read, err = ReadString(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum", str)
+	assert.Equal(t, 448, read)
+
+	// A string with leftover bytes:
+	buf = []byte("4:spam5:ligma")
+	str, read, err = ReadString(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "spam", str)
+	assert.Equal(t, 6, read)
+
+	// Wrong format:
+	buf = []byte("wrong format")
+	str, read, err = ReadString(buf)
+	require.Error(t, err)
+}

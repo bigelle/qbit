@@ -37,3 +37,24 @@ func ReadInt(b []byte) (num int, consumed int, err error) {
 
 	return num, consumed, nil
 }
+
+var StringSep = []byte(":")
+
+func ReadString(b []byte) (str string, consumed int, err error) {
+	idx := bytes.Index(b, StringSep)
+	if idx == -1 {
+		return "", 0, ErrMalformedString
+	}
+
+	ln, err := strconv.Atoi(string(b[:idx]))
+	if err != nil {
+		return "", 0, ErrMalformedString
+	}
+
+	consumed = idx + 1 + ln
+
+	// from ":", excluding ":", amount of chars defined
+	str = string(b[idx+1 : consumed])
+
+	return str, consumed, nil
+}
