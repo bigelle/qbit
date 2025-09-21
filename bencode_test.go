@@ -74,3 +74,31 @@ func TestReadString(t *testing.T) {
 	str, read, err = ReadString(buf)
 	require.Error(t, err)
 }
+
+func TestReadList(t *testing.T) {
+	// List of ints:
+	buf := []byte("li3ei5ei42ee")
+	list, read, err := ReadList(buf)
+	require.NoError(t, err)
+	assert.Equal(t, []any{3, 5, 42}, list)
+	assert.Equal(t, 12, read)
+
+	// List of strings:
+	buf = []byte("l3:cow3:moo4:spam4:eggse")
+	list, read, err = ReadList(buf)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"cow", "moo", "spam", "eggs"}, list)
+	assert.Equal(t, 24, read)
+
+	// List of lists of ints and strings:
+	buf = []byte("lli3ei5ei42eel3:cow3:moo4:spam4:eggseee")
+	list, read, err = ReadList(buf)
+	require.NoError(t, err)
+	assert.Equal(t, []any{[]any{3, 5, 42}, []any{"cow", "moo", "spam", "eggs"}}, list)
+	assert.Equal(t, 38, read)
+
+	// List not terminated
+	buf = []byte("li3ei5ei42e")
+	list, read, err = ReadList(buf)
+	require.Error(t, err)
+}
