@@ -7,22 +7,19 @@ import (
 )
 
 var (
-	BeginIntSep = []byte("i")
-	EndSep      = []byte("e")
-)
-
-var (
 	ErrMalformedInt    = errors.New("malformed integer")
 	ErrMalformedString = errors.New("malformed string")
+	ErrMalformedList   = errors.New("malformed list")
+	ErrMalformedDict   = errors.New("malformed dictionary")
 )
 
 func ReadInt(b []byte) (num int, consumed int, err error) {
-	idxI := bytes.Index(b, BeginIntSep)
+	idxI := bytes.IndexByte(b, 'i')
 	if idxI == -1 || idxI != 0 {
 		return 0, 0, ErrMalformedInt
 	}
 
-	idxE := bytes.Index(b, EndSep)
+	idxE := bytes.IndexByte(b, 'e')
 	if idxE == -1 {
 		return 0, 0, ErrMalformedInt
 	}
@@ -38,14 +35,12 @@ func ReadInt(b []byte) (num int, consumed int, err error) {
 	return num, consumed, nil
 }
 
-var StringSep = []byte(":")
-
 func ReadString(b []byte) (str string, consumed int, err error) {
 	if b[0] <= '0' || b[0] >= '9' {
 		return "", 0, ErrMalformedString
 	}
 
-	idx := bytes.Index(b, StringSep)
+	idx := bytes.IndexByte(b, ':')
 	if idx == -1 {
 		return "", 0, ErrMalformedString
 	}
@@ -63,12 +58,8 @@ func ReadString(b []byte) (str string, consumed int, err error) {
 	return str, consumed, nil
 }
 
-var ListSep = []byte("l")
-
-var ErrMalformedList = errors.New("malformed list")
-
 func ReadList(b []byte) (list []any, consumed int, err error) {
-	idxL := bytes.Index(b, ListSep)
+	idxL := bytes.IndexByte(b, 'l')
 	if idxL == -1 || idxL != 0 {
 		return nil, 0, ErrMalformedList
 	}
@@ -113,13 +104,8 @@ loop:
 	return list, consumed, nil
 }
 
-var (
-	DictSep          = []byte("d")
-	ErrMalformedDict = errors.New("malformed dictionary")
-)
-
 func ReadDictionary(b []byte) (dict map[string]any, consumed int, err error) {
-	idxL := bytes.Index(b, DictSep)
+	idxL := bytes.IndexByte(b, 'd')
 	if idxL == -1 || idxL != 0 {
 		return nil, 0, ErrMalformedList
 	}
