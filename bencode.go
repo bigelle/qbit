@@ -3,6 +3,7 @@ package qbit
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strconv"
 )
 
@@ -13,9 +14,12 @@ var (
 	ErrMalformedDict   = errors.New("malformed dictionary")
 )
 
-func ReadInt(b []byte) (num int, consumed int, err error) {
-	idxI := bytes.IndexByte(b, 'i')
-	if idxI == -1 || idxI != 0 {
+// ReadInt returns the integer num and the number of bytes read from b.
+// It expects b to begin with the encoded integer itself:
+//
+// "i42e<remaining bytes>" - will return 42, 4, nil
+func ReadInt(b []byte) (num int, read int, err error) {
+	if b[0] != 'i' {
 		return 0, 0, ErrMalformedInt
 	}
 
@@ -24,18 +28,22 @@ func ReadInt(b []byte) (num int, consumed int, err error) {
 		return 0, 0, ErrMalformedInt
 	}
 
-	num, err = strconv.Atoi(string(b[idxI+1 : idxE]))
+	num, err = strconv.Atoi(string(b[1:idxE]))
 	if err != nil {
 		return 0, 0, ErrMalformedInt
 	}
 
-	// including beginning and ending separator
-	consumed = len(b[idxI : idxE+1])
+	// including ending separator
+	read = len(b[:idxE+1])
 
-	return num, consumed, nil
+	return num, read, nil
 }
 
-func ReadString(b []byte) (str string, consumed int, err error) {
+// Readstring returns the string str and the number of bytes read from b.
+// It expects b to begin with the string itself:
+//
+// "4:spam<remaining bytes>" - will return "spam", 6, nil
+func ReadString(b []byte) (str string, read int, err error) {
 	if b[0] <= '0' || b[0] >= '9' {
 		return "", 0, ErrMalformedString
 	}
@@ -50,124 +58,115 @@ func ReadString(b []byte) (str string, consumed int, err error) {
 		return "", 0, ErrMalformedString
 	}
 
-	consumed = idx + 1 + ln
+	read = idx + 1 + ln
 
 	// from ":", excluding ":", amount of chars defined
-	str = string(b[idx+1 : consumed])
+	str = string(b[idx+1 : read])
 
-	return str, consumed, nil
+	return str, read, nil
 }
 
-func ReadList(b []byte) (list []any, consumed int, err error) {
-	idxL := bytes.IndexByte(b, 'l')
-	if idxL == -1 || idxL != 0 {
+// ReadList returns list and the number of bytes read from b.
+// It expects b to begin with the list itself:
+//
+// "l3:cow3:mooe<remaining bytes>" - will return {"cow", "moo"}, 12, nil
+func ReadList(b []byte) (list []any, read int, err error) {
+	if b[0] != 'l' {
 		return nil, 0, ErrMalformedList
 	}
 
-	consumed = 1
-loop:
+	read = 1
+	var (
+		v        any
+		readOnce int
+	)
+
 	for {
-		if consumed >= len(b) {
+		if read >= len(b) {
 			return nil, 0, errors.New("list not terminated")
 		}
 
-		var (
-			v    any
-			read int
-		)
-
-		switch b[consumed] {
-		case 'e':
-			consumed++
-			break loop
-		case 'i':
-			v, read, err = ReadInt(b[consumed:])
-		case 'l':
-			v, read, err = ReadList(b[consumed:])
-		case 'd':
-			v, read, err = ReadDictionary(b[consumed:])
-		default:
-			if b[consumed] >= '0' && b[consumed] <= '9' {
-				v, read, err = ReadString(b[consumed:])
-			} else {
-				return nil, 0, ErrMalformedList
-			}
-		}
-
+		v, readOnce, err = readAny(b[read:])
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				read++
+				break
+			}
 			return nil, 0, err
 		}
 		list = append(list, v)
-		consumed += read
+		read += readOnce
 	}
 
-	return list, consumed, nil
+	return list, read, nil
 }
 
-func ReadDictionary(b []byte) (dict map[string]any, consumed int, err error) {
+// ReadDictionary returns dict and the number of bytes read from b.
+// It expects b to begin with the dictionary itself:
+//
+// "d3:cow3:mooe<remaining bytes>" - will return {"cow": "moo"}, 12, nil
+func ReadDictionary(b []byte) (dict map[string]any, read int, err error) {
 	idxL := bytes.IndexByte(b, 'd')
 	if idxL == -1 || idxL != 0 {
 		return nil, 0, ErrMalformedList
 	}
-	consumed = 1
+	read = 1
 
 	dict = make(map[string]any)
 
+	var (
+		k        string
+		v        any
+		readOnce int
+	)
+
 	for {
-		if consumed >= len(b) {
+		if read >= len(b) {
 			return nil, 0, ErrMalformedDict
 		}
-		if b[consumed] == 'e' {
-			consumed++
+		if b[read] == 'e' {
+			read++
 			break
 		}
 
-		var (
-			k    string
-			v    any
-			read int
-		)
-
 		// first read the key and expect a string
-		if b[consumed] >= '0' && b[consumed] <= '9' {
-			k, read, err = ReadString(b[consumed:])
-			if err != nil {
-				return nil, 0, err
-			}
-			consumed += read
-		} else {
-			return nil, 0, ErrMalformedDict
+		k, readOnce, err = ReadString(b[read:])
+		if err != nil {
+			return nil, 0, err
 		}
+		read += readOnce
 
 		// need to check again
-		if consumed >= len(b) {
+		if read >= len(b) {
 			return nil, 0, ErrMalformedDict
 		}
 
 		// then read a value
-		switch b[consumed] {
-		case 'e':
-			return nil, 0, ErrMalformedDict // has a key, but no value
-		case 'i':
-			v, read, err = ReadInt(b[consumed:])
-		case 'l':
-			v, read, err = ReadList(b[consumed:])
-		case 'd':
-			v, read, err = ReadDictionary(b[consumed:])
-		default:
-			if b[consumed] >= '0' && b[consumed] <= '9' {
-				v, read, err = ReadString(b[consumed:])
-			} else {
+		v, readOnce, err = readAny(b[read:])
+		if err != nil {
+			if errors.Is(err, io.EOF) {
 				return nil, 0, ErrMalformedDict
 			}
-		}
-
-		if err != nil {
 			return nil, 0, err
 		}
 		dict[k] = v
-		consumed += read
+		read += readOnce
 	}
 
-	return dict, consumed, nil
+	return dict, read, nil
+}
+
+func readAny(b []byte) (any, int, error) {
+	switch b[0] {
+	case 'e':
+		return nil, 0, io.EOF
+	case 'i':
+		return ReadInt(b)
+	case 'l':
+		return ReadList(b)
+	case 'd':
+		return ReadDictionary(b)
+	default:
+		return ReadString(b)
+	}
 }
