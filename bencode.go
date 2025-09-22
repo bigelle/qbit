@@ -41,6 +41,10 @@ func ReadInt(b []byte) (num int, consumed int, err error) {
 var StringSep = []byte(":")
 
 func ReadString(b []byte) (str string, consumed int, err error) {
+	if b[0] <= '0' || b[0] >= '9' {
+		return "", 0, ErrMalformedString
+	}
+
 	idx := bytes.Index(b, StringSep)
 	if idx == -1 {
 		return "", 0, ErrMalformedString
@@ -109,6 +113,75 @@ loop:
 	return list, consumed, nil
 }
 
+var (
+	DictSep          = []byte("d")
+	ErrMalformedDict = errors.New("malformed dictionary")
+)
+
 func ReadDictionary(b []byte) (dict map[string]any, consumed int, err error) {
-	return nil, 0, errors.New("not implemented yet")
+	idxL := bytes.Index(b, DictSep)
+	if idxL == -1 || idxL != 0 {
+		return nil, 0, ErrMalformedList
+	}
+	consumed = 1
+
+	dict = make(map[string]any)
+
+	for {
+		if consumed >= len(b) {
+			return nil, 0, ErrMalformedDict
+		}
+		if b[consumed] == 'e' {
+			consumed++
+			break
+		}
+
+		var (
+			k    string
+			v    any
+			read int
+		)
+
+		// first read the key and expect a string
+		if b[consumed] >= '0' && b[consumed] <= '9' {
+			k, read, err = ReadString(b[consumed:])
+			if err != nil {
+				return nil, 0, err
+			}
+			consumed += read
+		} else {
+			return nil, 0, ErrMalformedDict
+		}
+
+		// need to check again
+		if consumed >= len(b) {
+			return nil, 0, ErrMalformedDict
+		}
+
+		// then read a value
+		switch b[consumed] {
+		case 'e':
+			return nil, 0, ErrMalformedDict // has a key, but no value
+		case 'i':
+			v, read, err = ReadInt(b[consumed:])
+		case 'l':
+			v, read, err = ReadList(b[consumed:])
+		case 'd':
+			v, read, err = ReadDictionary(b[consumed:])
+		default:
+			if b[consumed] >= '0' && b[consumed] <= '9' {
+				v, read, err = ReadString(b[consumed:])
+			} else {
+				return nil, 0, ErrMalformedDict
+			}
+		}
+
+		if err != nil {
+			return nil, 0, err
+		}
+		dict[k] = v
+		consumed += read
+	}
+
+	return dict, consumed, nil
 }

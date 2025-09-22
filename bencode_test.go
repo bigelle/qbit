@@ -102,3 +102,34 @@ func TestReadList(t *testing.T) {
 	list, read, err = ReadList(buf)
 	require.Error(t, err)
 }
+
+func TestReadDictionary(t *testing.T) {
+	// 1 key 1 value:
+	buf := []byte("d3:cow3:mooe")
+	dict, read, err := ReadDictionary(buf)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"cow": "moo"}, dict)
+	assert.Equal(t, 12, read)
+
+	// 1 key, 1 list value
+	buf = []byte("d4:spaml1:a1:bee")
+	dict, read, err = ReadDictionary(buf)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"spam": []any{"a", "b"}}, dict)
+	assert.Equal(t, 16, read)
+
+	// Wrong format:
+	buf = []byte("wrong format")
+	dict, read, err = ReadDictionary(buf)
+	require.Error(t, err)
+
+	// Not a string as a key:
+	buf = []byte("di3e4:spam")
+	dict, read, err = ReadDictionary(buf)
+	require.Error(t, err)
+
+	// 2 keys 1 value:
+	buf = []byte("d3:cow3:moo4:spam")
+	dict, read, err = ReadDictionary(buf)
+	require.Error(t, err)
+}
