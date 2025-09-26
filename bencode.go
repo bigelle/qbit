@@ -3,7 +3,9 @@ package qbit
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"strconv"
 )
 
@@ -12,20 +14,133 @@ var (
 	ErrMalformedString = errors.New("malformed string")
 	ErrMalformedList   = errors.New("malformed list")
 	ErrMalformedDict   = errors.New("malformed dictionary")
+
+	ErrNotEnoughData = errors.New("not enough data")
 )
 
-// ReadInt returns the integer num and the number of bytes read from b.
+type BencodeDecoder struct {
+	readPos int
+	src     io.Reader
+	buf     []byte
+}
+
+func NewDecoder(src io.Reader) *BencodeDecoder {
+	return &BencodeDecoder{
+		readPos: 0,
+		src:     src,
+		buf:     make([]byte, 4*1024),
+	}
+}
+
+func (d *BencodeDecoder) Decode(v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer {
+		return errors.New("v must be a pointer")
+	}
+	if rv.IsNil() {
+		return errors.New("v can't be nil")
+	}
+
+	err := d.decodeAny(rv)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *BencodeDecoder) decodeAny(rv reflect.Value) error {
+	b, err := d.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	switch b {
+	case 'i':
+		err = d.decodeInt(rv)
+	default:
+		err = d.decodeString(rv)
+	}
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *BencodeDecoder) decodeString(rv reflect.Value) (err error) {
+	var (
+		n   int
+		str string
+	)
+	for {
+		n, err = d.src.Read(d.buf[d.readPos:])
+		if err != nil {
+			return err
+		}
+
+		str, n, err = ParseString(d.buf[:d.readPos+n])
+		if err == nil {
+			rv.Elem().SetString(str)
+			return nil
+		}
+
+		if errors.Is(err, ErrNotEnoughData) {
+			continue
+		}
+		return err
+	}
+}
+
+func (d *BencodeDecoder) decodeInt(rv reflect.Value) (err error) {
+	var (
+		n int
+		i int
+	)
+	for {
+		n, err = d.src.Read(d.buf[d.readPos:])
+		if err != nil {
+			return err
+		}
+
+		i, n, err = ParseInt(d.buf[:d.readPos+n])
+		if err == nil {
+			rv.Elem().SetInt(int64(i))
+			return nil
+		}
+
+		if errors.Is(err, ErrNotEnoughData) {
+			continue
+		}
+		return err
+	}
+}
+
+func (d *BencodeDecoder) ReadByte() (byte, error) {
+	n, err := d.src.Read(d.buf[d.readPos : d.readPos+1])
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 {
+		return 0, io.EOF
+	}
+	d.readPos++
+
+	return d.buf[d.readPos-1], nil
+}
+
+// ParseInt returns the integer num and the number of bytes read from b.
 // It expects b to begin with the encoded integer itself:
 //
 // "i42e<remaining bytes>" - will return 42, 4, nil
-func ReadInt(b []byte) (num int, read int, err error) {
+func ParseInt(b []byte) (num int, read int, err error) {
 	if b[0] != 'i' {
 		return 0, 0, ErrMalformedInt
 	}
 
 	idxE := bytes.IndexByte(b, 'e')
 	if idxE == -1 {
-		return 0, 0, ErrMalformedInt
+		return 0, 0, ErrNotEnoughData
 	}
 
 	num, err = strconv.Atoi(string(b[1:idxE]))
@@ -43,19 +158,24 @@ func ReadInt(b []byte) (num int, read int, err error) {
 // It expects b to begin with the string itself:
 //
 // "4:spam<remaining bytes>" - will return "spam", 6, nil
-func ReadString(b []byte) (str string, read int, err error) {
-	if b[0] <= '0' || b[0] >= '9' {
+func ParseString(b []byte) (str string, read int, err error) {
+	if (b[0] < '0' || b[0] > '9') && b[0] != '-' {
 		return "", 0, ErrMalformedString
 	}
 
 	idx := bytes.IndexByte(b, ':')
 	if idx == -1 {
-		return "", 0, ErrMalformedString
+		return "", 0, ErrNotEnoughData
 	}
 
 	ln, err := strconv.Atoi(string(b[:idx]))
 	if err != nil {
+		fmt.Println(string(b))
 		return "", 0, ErrMalformedString
+	}
+
+	if idx+1+ln > len(b) {
+		return "", 0, ErrNotEnoughData
 	}
 
 	read = idx + 1 + ln
@@ -66,27 +186,27 @@ func ReadString(b []byte) (str string, read int, err error) {
 	return str, read, nil
 }
 
-// ReadList returns list and the number of bytes read from b.
+// ParseList returns list and the number of bytes read from b.
 // It expects b to begin with the list itself:
 //
 // "l3:cow3:mooe<remaining bytes>" - will return {"cow", "moo"}, 12, nil
-func ReadList(b []byte) (list []any, read int, err error) {
+func ParseList(b []byte) (list []any, read int, err error) {
 	if b[0] != 'l' {
 		return nil, 0, ErrMalformedList
 	}
 
 	read = 1
 	var (
-		v        any
-		readOnce int
+		v any
+		n int
 	)
 
 	for {
 		if read >= len(b) {
-			return nil, 0, errors.New("list not terminated")
+			return nil, 0, ErrNotEnoughData
 		}
 
-		v, readOnce, err = readAny(b[read:])
+		v, n, err = readAny(b[read:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				read++
@@ -95,34 +215,33 @@ func ReadList(b []byte) (list []any, read int, err error) {
 			return nil, 0, err
 		}
 		list = append(list, v)
-		read += readOnce
+		read += n
 	}
 
 	return list, read, nil
 }
 
-// ReadDictionary returns dict and the number of bytes read from b.
+// ParseDictionary returns dict and the number of bytes read from b.
 // It expects b to begin with the dictionary itself:
 //
 // "d3:cow3:mooe<remaining bytes>" - will return {"cow": "moo"}, 12, nil
-func ReadDictionary(b []byte) (dict map[string]any, read int, err error) {
-	idxL := bytes.IndexByte(b, 'd')
-	if idxL == -1 || idxL != 0 {
-		return nil, 0, ErrMalformedList
+func ParseDictionary(b []byte) (dict map[string]any, read int, err error) {
+	if b[0] != 'd' {
+		return nil, 0, ErrMalformedDict
 	}
-	read = 1
 
+	read = 1
 	dict = make(map[string]any)
 
 	var (
-		k        string
-		v        any
-		readOnce int
+		k string
+		v any
+		n int
 	)
 
 	for {
 		if read >= len(b) {
-			return nil, 0, ErrMalformedDict
+			return nil, 0, ErrNotEnoughData
 		}
 		if b[read] == 'e' {
 			read++
@@ -130,19 +249,19 @@ func ReadDictionary(b []byte) (dict map[string]any, read int, err error) {
 		}
 
 		// first read the key and expect a string
-		k, readOnce, err = ReadString(b[read:])
+		k, n, err = ParseString(b[read:])
 		if err != nil {
 			return nil, 0, err
 		}
-		read += readOnce
+		read += n
 
 		// need to check again
 		if read >= len(b) {
-			return nil, 0, ErrMalformedDict
+			return nil, 0, ErrNotEnoughData
 		}
 
 		// then read a value
-		v, readOnce, err = readAny(b[read:])
+		v, n, err = readAny(b[read:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil, 0, ErrMalformedDict
@@ -150,7 +269,7 @@ func ReadDictionary(b []byte) (dict map[string]any, read int, err error) {
 			return nil, 0, err
 		}
 		dict[k] = v
-		read += readOnce
+		read += n
 	}
 
 	return dict, read, nil
@@ -161,12 +280,12 @@ func readAny(b []byte) (any, int, error) {
 	case 'e':
 		return nil, 0, io.EOF
 	case 'i':
-		return ReadInt(b)
+		return ParseInt(b)
 	case 'l':
-		return ReadList(b)
+		return ParseList(b)
 	case 'd':
-		return ReadDictionary(b)
+		return ParseDictionary(b)
 	default:
-		return ReadString(b)
+		return ParseString(b)
 	}
 }
